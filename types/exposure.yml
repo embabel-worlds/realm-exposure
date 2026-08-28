@@ -1,0 +1,121 @@
+# One STORED type and four VIRTUAL ones, forming a chain the engine walks in a
+# single read:
+#
+#   WatchedRepo -> Dependency -> Vulnerability -> KevListing
+#                                                -> EpssScore
+#
+# Only the first is persisted, and it holds nothing but names and ownership: the
+# repositories you care about, which service each is, and who to wake up. Every
+# other node is fetched when a query traverses to it and rolled back after —
+# there is no scan, no nightly ingest, and no copy of your dependency tree
+# sitting in a database going stale. Ask the question and the answer is composed
+# from the sources at that moment.
+#
+# The chain is the point. Each hop is a different organisation's data — GitHub's
+# resolver, Google's package index, CISA's threat catalog, FIRST's model — and
+# not one of them knows about the others. The join is the product.
+
+# The only thing you have to tell this realm.
+- name: WatchedRepo
+  description: "A repository this world watches for supply-chain exposure, and the ownership context that makes a finding actionable. The one thing a user seeds by hand: everything else in this realm hangs off it. `internetFacing` and `tier` are not decoration — a critical CVE in an internet-facing service and the same CVE in a nightly batch job are different sentences, and the views say so."
+  properties:
+    fullName:
+      description: "`owner/repo`, e.g. `embabel/embabel-agent`. The identity."
+      metadata:
+        identity: "true"
+    owner: "The GitHub org or user login — the first path segment."
+    repo: "The repository name, without the owner."
+    service: "The thing this repository IS in your architecture, in your own words — 'checkout API', 'billing batch'. What a finding gets reported against."
+    team: "Who owns it. The name a finding should be routed to."
+    internetFacing: "`true` if this runs somewhere the public can reach. The single biggest modifier on whether a vulnerability matters."
+    tier: "How much it matters: `critical`, `important` or `routine`. Your judgement, not a scanner's."
+    notes: "Anything a reader needs to interpret a finding here."
+
+# Stage 1 — the real, resolved dependency tree.
+- name: Dependency
+  description: "One resolved dependency of a watched repository, from GitHub's own dependency graph as SPDX. TRANSITIVE dependencies are included — this is what the repository actually pulls in, not what its manifest names. Reached from WatchedRepo via HAS_DEPENDENCY. The identity is the purl, so one package version used by five repositories is ONE node with five edges, which is what makes 'how far does this reach' a single question. A package with no purl cannot be looked up at any downstream source and is dropped rather than carried as an unresolvable row."
+  virtualJoins:
+    - anchorLabel: WatchedRepo
+      relationship: HAS_DEPENDENCY
+      producerKeyFields: [owner, repo]
+      recordKeyField: key
+      producer: repoDependencies
+      description: "Everything the repository resolves, transitive included — for 'what do we actually ship' and as the spine every risk hop hangs from."
+  properties:
+    purl:
+      description: "Package URL — ecosystem, name and exact version in one string, e.g. `pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1`. IDENTITY: shared across repositories on purpose, so the blast radius of one bad version is an edge count."
+      metadata:
+        identity: "true"
+    key: "The `owner|repo` this was fetched for — the join link back to the repository."
+    packageName: "The package as its ecosystem names it, e.g. `org.apache.logging.log4j:log4j-core`."
+    version: "The exact resolved version."
+    licence: "The licence GitHub concluded, SPDX form. Free alongside the risk data, and the second question an executive asks."
+    spdxId: "The SPDX element id within the source document. Provenance, not identity."
+
+# Stage 2 — what is known against this exact version.
+- name: Vulnerability
+  description: "One known vulnerability affecting one exact dependency version, from OSV. Reached from Dependency via HAS_VULNERABILITY. `cveId` is the load-bearing field: OSV's own key is a GHSA, but CISA and FIRST are both keyed on CVE, so it is what makes the exploitation data reachable at all. `severity` here is the word (CRITICAL/HIGH/MODERATE/LOW) and is deliberately NOT the ranking signal — it scores how bad this would be IF exploited, which is why most of any backlog reads high and why nobody can triage from it. A dependency with no HAS_VULNERABILITY edge is clean, and that is the overwhelmingly common case."
+  virtualJoins:
+    - anchorLabel: Dependency
+      relationship: HAS_VULNERABILITY
+      producerKeyFields: [purl]
+      recordKeyField: key
+      producer: vulnsForPurl
+      maxAnchors: 600
+      description: "Everything known against this exact version — an empty result means the version is clean, not that the lookup failed."
+  properties:
+    vulnId:
+      description: "OSV's id for the vulnerability, usually a GHSA such as `GHSA-jfh8-c2jp-5v3q`. IDENTITY — one vulnerability reached from many dependencies is ONE node, which is how 'how many of our packages does this single advisory hit' is a question at all."
+      metadata:
+        identity: "true"
+    key: "The purl this was found against — the join link back to the dependency."
+    cveId: "The CVE alias, e.g. `CVE-2021-44228`. The key both CISA KEV and FIRST EPSS are on. Null for a vulnerability that never received one — real, and it means the exploitation feeds cannot speak to it."
+    summary: "One line on what the vulnerability is."
+    severity: "CRITICAL, HIGH, MODERATE or LOW, as the advisory database graded it. Impact if exploited — not likelihood."
+    cvssVector: "The CVSS vector string. `AV:N` means reachable over a network, which is the part worth reading."
+    published: "When the vulnerability was first published."
+
+# Stage 4a — is it being exploited RIGHT NOW?
+- name: KevListing
+  description: "This CVE's entry in CISA's Known Exploited Vulnerabilities catalog — present ONLY if the US government has confirmed the vulnerability is being exploited against real targets. Reached from Vulnerability via ON_KEV. The absence of this node is the normal case and is good news; its presence is the single most actionable fact in public vulnerability data, and `knownRansomwareCampaignUse` is the sharpest field in it. The producer fetches the whole catalog in ONE call regardless of how many CVEs are asked about, and the engine matches entries to anchors by CVE."
+  virtualJoins:
+    - anchorLabel: Vulnerability
+      relationship: ON_KEV
+      producerKeyFields: [cveId]
+      recordKeyField: cveID
+      producer: kevCatalog
+      maxAnchors: 400
+      description: "Present only when CISA confirms active exploitation — the filter that turns a backlog into a shortlist."
+  properties:
+    cveID:
+      description: "The CVE. Identity, and also what matches this entry to the vulnerability that reached it."
+      metadata:
+        identity: "true"
+    vendorProject: "The vendor CISA names."
+    product: "The product CISA names."
+    vulnerabilityName: "CISA's own name for it."
+    dateAdded: "When CISA added it to the catalog. Recent means the exploitation is current news."
+    shortDescription: "CISA's description of what the vulnerability allows."
+    requiredAction: "What CISA directs federal agencies to do. Free, specific remediation advice that applies to everyone."
+    dueDate: "The date by which US federal agencies must have fixed it. A useful external yardstick for how urgent somebody else thinks this is."
+    knownRansomwareCampaignUse: "`Known` if it has been used in ransomware campaigns. When this says Known, the conversation is over."
+
+# Stage 4b — how likely is exploitation next?
+- name: EpssScore
+  description: "The EPSS probability that this CVE will be exploited in the wild within the next 30 days, from FIRST. Reached from Vulnerability via HAS_EPSS. Where KEV is a fact about the past and present, this is a forecast — it is how a backlog gets ranked BELOW the KEV shortlist, and it separates the merely severe from the actually dangerous far better than CVSS does. Genuinely batched: many CVEs in one request."
+  virtualJoins:
+    - anchorLabel: Vulnerability
+      relationship: HAS_EPSS
+      producerKeyFields: [cveId]
+      recordKeyField: cve
+      producer: epssScores
+      maxAnchors: 400
+      description: "Probability of exploitation in the next 30 days — the ranking signal for everything CISA has not confirmed yet."
+  properties:
+    cve:
+      description: "The CVE. Identity, and the field each row is matched back on."
+      metadata:
+        identity: "true"
+    epss: "Probability of exploitation activity in the next 30 days, 0 to 1. Above 0.1 is a small minority of all CVEs; above 0.5 is rare."
+    percentile: "Where this sits against every scored CVE, 0 to 1. Usually the more legible number to quote to somebody who has not met EPSS."
+    date: "The model run this score comes from. EPSS is re-scored daily."

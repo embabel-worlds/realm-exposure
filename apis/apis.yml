@@ -1,0 +1,54 @@
+# Four open sources, every spec VENDORED next to this file and cut down to the
+# operations the producers actually call.
+#
+# NOT ONE of them takes a credential. That is a deliberate product decision, not
+# a limitation: the whole argument this realm makes is that a technical person
+# can install the appliance and have a real answer about their own code before
+# anyone has been asked to raise a ticket for an API key. Public repositories
+# work anonymously; a private one needs a GitHub token, and that is the only
+# place a credential ever enters.
+
+# GitHub's dependency graph, as SPDX. The repository's RESOLVED dependency tree,
+# transitive included, already computed by GitHub — so this realm never parses a
+# pom.xml, a package-lock.json or a go.sum, and never drifts when a build tool
+# changes its format. Every package arrives with a purl, which is exactly the key
+# deps.dev takes.
+- url: github-sbom.json
+  name: github_sbom
+  type: openapi
+  auth: none
+  operation-ids:
+    - repoSbom
+
+# OSV, Google's open vulnerability database. Resolves a purl DIRECTLY and accepts
+# the qualifiers GitHub's SBOM emits (`?type=jar`), which is why this realm
+# contains no string handling anywhere: the SBOM produces a purl and OSV consumes
+# the same purl, byte for byte. It also returns the CVE alias, the summary and the
+# severity in the SAME response, so learning what an advisory says costs no extra
+# hop — a chain that was four deep is three.
+- url: osv.json
+  name: osv
+  type: openapi
+  auth: none
+  operation-ids:
+    - vulnsForPurl
+
+# CISA's Known Exploited Vulnerabilities catalog: the CVEs the US government has
+# CONFIRMED are being used against real targets. One global feed, no parameters.
+# This is the column that turns a backlog into a shortlist.
+- url: cisa-kev.json
+  name: cisa_kev
+  type: openapi
+  auth: none
+  operation-ids:
+    - kevCatalog
+
+# FIRST's EPSS: the modelled probability that a CVE will be exploited in the next
+# 30 days. KEV says "this is happening"; EPSS says "this is about to". Together
+# they rank a backlog that CVSS alone leaves flat — 40% of everything is "high".
+- url: first-epss.json
+  name: first_epss
+  type: openapi
+  auth: none
+  operation-ids:
+    - epssScores

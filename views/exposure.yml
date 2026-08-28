@@ -1,0 +1,232 @@
+# The realm's answer surface.
+#
+# ONE RULE governs every view here that touches a vulnerability, and getting it
+# wrong produces confident nonsense rather than an error:
+#
+#     WHERE d.purl CONTAINS '@'
+#
+# GitHub cannot always resolve an exact version, and it says so by emitting a purl
+# with no `@version` — `pkg:maven/com.fasterxml.jackson.core/jackson-databind`
+# rather than `...@2.18.2`. OSV answers a versionless purl with every vulnerability
+# the package has EVER had: 80 of them for that example, against 7 for the version
+# actually in use. Report those 80 and you have told someone they have eleven times
+# the exposure they have, in a table that looks exactly like a real one. So the
+# guard is on every vulnerability view, and `UnresolvedDependencies` exists so the
+# dependencies it excludes are reported as a gap rather than silently dropped.
+#
+# The second thing worth stating: severity does NOT rank these views. CVSS and the
+# CRITICAL/HIGH grading say how bad a vulnerability would be if exploited, which is
+# why most of any backlog reads high and why nobody can triage from it. The ranking
+# is KEV first (CISA has confirmed exploitation), then EPSS (the modelled chance of
+# exploitation in the next 30 days), and only then severity.
+
+- name: ActivelyExploited
+  description: The shortlist. Vulnerabilities in your watched repositories that CISA has confirmed are being exploited in the wild right now — with the service, the owning team, and whether it is internet-facing. This is the view that turns a backlog into a morning's work.
+  params:
+    limit:
+      type: int
+      default: 50
+      description: "Maximum findings to return."
+  cypher: |
+    MATCH (w:WatchedRepo)-[:HAS_DEPENDENCY]->(d:Dependency)
+    WHERE d.purl CONTAINS '@'
+    MATCH (d)-[:HAS_VULNERABILITY]->(v:Vulnerability)-[:ON_KEV]->(k:KevListing)
+    RETURN w.service AS service,
+           w.fullName AS repo,
+           w.team AS team,
+           w.internetFacing AS internetFacing,
+           w.tier AS tier,
+           d.packageName AS package,
+           d.version AS version,
+           v.cveId AS cve,
+           v.severity AS severity,
+           k.vulnerabilityName AS knownAs,
+           k.knownRansomwareCampaignUse AS usedInRansomware,
+           k.dateAdded AS confirmedExploitedSince,
+           k.requiredAction AS cisaRequiredAction,
+           k.dueDate AS federalDeadline,
+           v.summary AS summary
+    ORDER BY usedInRansomware DESC, internetFacing DESC, confirmedExploitedSince DESC
+    LIMIT $limit
+
+- name: RiskRanked
+  description: Every vulnerability across every watched repository, ranked the way exploitation actually works — CISA-confirmed first, then by EPSS probability of exploitation in the next 30 days, and only then by severity. The full triage queue, in the order a team should work it.
+  params:
+    limit:
+      type: int
+      default: 40
+      description: "Maximum findings to return, most urgent first."
+    minEpss:
+      type: float
+      default: 0.0
+      description: "Drop anything below this EPSS probability (0-1). 0.01 already removes most of a backlog."
+  cypher: |
+    MATCH (w:WatchedRepo)-[:HAS_DEPENDENCY]->(d:Dependency)
+    WHERE d.purl CONTAINS '@'
+    MATCH (d)-[:HAS_VULNERABILITY]->(v:Vulnerability)
+    WHERE v.cveId IS NOT NULL
+    OPTIONAL MATCH (v)-[:ON_KEV]->(k:KevListing)
+    OPTIONAL MATCH (v)-[:HAS_EPSS]->(e:EpssScore)
+    WITH w, d, v, k, e,
+         CASE WHEN k IS NULL THEN 0 ELSE 1 END AS exploited,
+         coalesce(toFloat(e.epss), 0.0) AS epss
+    RETURN v.cveId AS cve,
+           w.service AS service,
+           w.team AS team,
+           d.packageName AS package,
+           d.version AS version,
+           exploited = 1 AS confirmedExploited,
+           round(epss * 10000.0) / 10000.0 AS epssProbability,
+           round(coalesce(toFloat(e.percentile), 0.0) * 1000.0) / 10.0 AS epssPercentile,
+           v.severity AS severity,
+           w.internetFacing AS internetFacing,
+           v.summary AS summary
+    ORDER BY exploited DESC, epss DESC, severity ASC
+    LIMIT $limit
+
+- name: RepoExposure
+  description: One row per watched repository — how much it depends on, how much of that could be resolved to an exact version, how many vulnerabilities it carries and how many of those are actively exploited. The management summary, and the view to open a conversation with.
+  params:
+    limit:
+      type: int
+      default: 25
+      description: "Maximum repositories to return."
+  cypher: |
+    MATCH (w:WatchedRepo)-[:HAS_DEPENDENCY]->(d:Dependency)
+    WITH w,
+         count(d) AS dependencies,
+         count(CASE WHEN d.purl CONTAINS '@' THEN 1 END) AS versionResolved
+    MATCH (w)-[:HAS_DEPENDENCY]->(d2:Dependency)
+    WHERE d2.purl CONTAINS '@'
+    OPTIONAL MATCH (d2)-[:HAS_VULNERABILITY]->(v:Vulnerability)
+    OPTIONAL MATCH (v)-[:ON_KEV]->(k:KevListing)
+    WITH w, dependencies, versionResolved,
+         count(DISTINCT v) AS vulnerabilities,
+         count(DISTINCT CASE WHEN v.severity = 'CRITICAL' THEN v END) AS critical,
+         count(DISTINCT k) AS activelyExploited,
+         count(DISTINCT CASE WHEN d2.purl IS NOT NULL AND v IS NOT NULL THEN d2 END) AS vulnerablePackages
+    RETURN w.service AS service,
+           w.fullName AS repo,
+           w.team AS team,
+           w.tier AS tier,
+           w.internetFacing AS internetFacing,
+           dependencies,
+           versionResolved,
+           dependencies - versionResolved AS versionUnresolved,
+           vulnerablePackages,
+           vulnerabilities,
+           critical,
+           activelyExploited
+    ORDER BY activelyExploited DESC, critical DESC, vulnerabilities DESC
+    LIMIT $limit
+
+- name: BlastRadius
+  description: For each vulnerability, how far it reaches — how many watched repositories and how many distinct package versions carry it. A single upgrade that clears five services is worth more than five that clear one, and this is the view that finds it.
+  params:
+    limit:
+      type: int
+      default: 25
+      description: "Maximum vulnerabilities to return, widest reach first."
+  cypher: |
+    MATCH (w:WatchedRepo)-[:HAS_DEPENDENCY]->(d:Dependency)
+    WHERE d.purl CONTAINS '@'
+    MATCH (d)-[:HAS_VULNERABILITY]->(v:Vulnerability)
+    OPTIONAL MATCH (v)-[:ON_KEV]->(k:KevListing)
+    WITH v,
+         count(DISTINCT w) AS repos,
+         count(DISTINCT d) AS packageVersions,
+         collect(DISTINCT w.service)[0..6] AS services,
+         count(DISTINCT k) AS onKev
+    RETURN v.cveId AS cve,
+           v.vulnId AS advisory,
+           v.severity AS severity,
+           repos AS repositoriesAffected,
+           packageVersions,
+           services AS reaches,
+           onKev > 0 AS confirmedExploited,
+           v.summary AS summary
+    ORDER BY onKev DESC, repos DESC, packageVersions DESC
+    LIMIT $limit
+
+- name: UnresolvedDependencies
+  description: Dependencies GitHub could not pin to an exact version, which is a hole in the analysis rather than a clean result — nothing can be said about their vulnerability status, and this view exists so that silence is visible instead of being mistaken for safety.
+  params:
+    limit:
+      type: int
+      default: 40
+      description: "Maximum unresolved dependencies to return."
+  cypher: |
+    MATCH (w:WatchedRepo)-[:HAS_DEPENDENCY]->(d:Dependency)
+    WHERE NOT d.purl CONTAINS '@'
+    RETURN w.fullName AS repo,
+           w.service AS service,
+           d.packageName AS package,
+           d.purl AS purl,
+           'no exact version resolved — vulnerability status unknown, not clean' AS why
+    ORDER BY repo, package
+    LIMIT $limit
+
+- name: RansomwareExposure
+  description: The subset of your exposure that has been used in real ransomware campaigns, per CISA. The shortest and least arguable view in the realm — if this returns rows, nothing else in the backlog matters until they are gone.
+  params:
+    limit:
+      type: int
+      default: 25
+      description: "Maximum findings."
+  cypher: |
+    MATCH (w:WatchedRepo)-[:HAS_DEPENDENCY]->(d:Dependency)
+    WHERE d.purl CONTAINS '@'
+    MATCH (d)-[:HAS_VULNERABILITY]->(v:Vulnerability)-[:ON_KEV]->(k:KevListing)
+    WHERE k.knownRansomwareCampaignUse = 'Known'
+    RETURN w.service AS service,
+           w.fullName AS repo,
+           w.team AS team,
+           d.packageName AS package,
+           d.version AS version,
+           v.cveId AS cve,
+           k.vulnerabilityName AS knownAs,
+           k.requiredAction AS cisaRequiredAction,
+           k.dueDate AS federalDeadline
+    ORDER BY federalDeadline ASC
+    LIMIT $limit
+
+- name: LicenceMix
+  description: What licences your dependencies actually carry, counted across every watched repository — free alongside the security data because the same SBOM answers it, and usually the second question an executive asks after the first one.
+  params:
+    limit:
+      type: int
+      default: 25
+      description: "Maximum licences to return, most common first."
+  cypher: |
+    MATCH (w:WatchedRepo)-[:HAS_DEPENDENCY]->(d:Dependency)
+    WHERE d.licence IS NOT NULL
+    WITH d.licence AS licence,
+         count(DISTINCT d) AS packages,
+         count(DISTINCT w) AS repos,
+         collect(DISTINCT d.packageName)[0..4] AS examples
+    RETURN licence, packages, repos, examples
+    ORDER BY packages DESC
+    LIMIT $limit
+
+- name: ExposureBriefing
+  description: The paragraph to take upstairs. Reads every actively-exploited finding across the estate and writes the assessment an engineering leader would give their board — what is exposed, why it matters, and what to do first. Costs a model call; the other views are the evidence under it.
+  params:
+    limit:
+      type: int
+      default: 30
+      description: "How many findings to feed the assessment."
+  cypher: |
+    MATCH (w:WatchedRepo)-[:HAS_DEPENDENCY]->(d:Dependency)
+    WHERE d.purl CONTAINS '@'
+    MATCH (d)-[:HAS_VULNERABILITY]->(v:Vulnerability)-[:ON_KEV]->(k:KevListing)
+    WITH w, d, v, k LIMIT $limit
+    WITH w.service + ' (' + w.fullName + ', owned by ' + coalesce(w.team, 'nobody recorded') +
+         ', internet-facing: ' + coalesce(w.internetFacing, 'unknown') + ') depends on ' +
+         d.packageName + ' ' + coalesce(d.version, 'unknown version') +
+         ', which carries ' + coalesce(v.cveId, v.vulnId) + ' — ' + coalesce(v.summary, k.vulnerabilityName) +
+         '. CISA confirmed active exploitation on ' + k.dateAdded +
+         '; used in ransomware: ' + k.knownRansomwareCampaignUse +
+         '. Required action: ' + k.requiredAction AS finding
+    RETURN synthesize(finding,
+      'Write the assessment an engineering leader would give their board, using ONLY the findings supplied. Lead with the single most urgent item and say plainly why it is the most urgent. Group the rest by the team that owns them. Name specific services, packages and CVEs rather than generalising into "several components". End with the three actions to take this week, in order. Be direct and unhedged; do not pad, do not recommend buying anything, and do not restate the data as a list. Critically: never name a service, team, repository or component that does not appear in the findings, and never remark on the absence of one — if the evidence covers one service, write about that service and stop. Mentioning what is not there reads as a gap in the analysis rather than in the data.'
+    ) AS briefing

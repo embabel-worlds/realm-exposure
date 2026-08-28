@@ -1,0 +1,41 @@
+name: realm-exposure
+description: |
+  What your software is actually exposed to — and which of it is being
+  exploited right now.
+
+  Names the repositories you care about once, then walks: repository ->
+  its real resolved dependencies (GitHub's own dependency graph, so no
+  build files are parsed) -> the known vulnerabilities against each exact
+  version -> the CVE, its CVSS, whether CISA lists it as ACTIVELY
+  EXPLOITED, and the EPSS probability that it will be exploited in the
+  next thirty days.
+
+  That last hop is the point. Every scanner can tell you a package is
+  vulnerable; a backlog of four thousand alerts is not an answer. This
+  realm ranks the backlog by what is actually being used against people
+  in the wild, and joins each finding back to the service and the team
+  that owns it — which is the sentence an engineering leader can act on
+  and take upstairs.
+
+  Sources are open and keyless: GitHub's dependency-graph SBOM, Google's
+  deps.dev, CISA's Known Exploited Vulnerabilities catalog, and FIRST's
+  EPSS. Public repositories need no credentials at all, so the first
+  answer arrives before anyone has been asked for an API key.
+version: 0.1.0
+author: rod
+tags:
+  - security
+  - supply-chain
+  - vulnerabilities
+  - sbom
+  - openapi
+  - apps
+  - handlers
+exports:
+  - github_sbom
+  - osv
+  - cisa_kev
+  - first_epss
+  - WatchedRepo
+  - Dependency
+  - Vulnerability

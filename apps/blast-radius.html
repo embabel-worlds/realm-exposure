@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Blast Radius</title>
+<meta name="description" content="Which of your software's vulnerabilities are actually being exploited in the wild, which services and teams own them, and how far each one reaches across the estate.">
+<link rel="stylesheet" href="/api/v1/apps-runtime/v1/theme.css">
+<script src="/api/v1/apps-runtime/v1/embabel.js"></script>
+<script type="application/embabel-app+json">
+{"version":1,"name":"blast-radius","requires":{"lenses":[],"views":["ActivelyExploited","RiskRanked","RepoExposure","BlastRadius","UnresolvedDependencies","RansomwareExposure","LicenceMix","ExposureBriefing"],"realms":["realm-exposure"],"namespaces":[]}}
+</script>
+<style>
+  :root {
+    --bg:#0a0a0f; --surface:#13131a; --border:#1e1e2e;
+    --cyan:#63c0f5; --purple:#9f77cd; --green:#3fd73c;
+    --dim:#6b7280; --text:#e5e7eb; --amber:#e8b64c; --red:#e2685f;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; padding:0 0 56px; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; line-height:1.5;
+  }
+  .wrap { max-width:1180px; margin:0 auto; padding:26px 20px 8px; }
+  header h1 { margin:0; font-size:1.75rem; font-weight:300; letter-spacing:.1em; text-transform:uppercase; }
+  header p.sub { margin:6px 0 0; color:var(--dim); font-size:.88rem; max-width:70ch; }
+  .verdict {
+    margin:22px 0 0; padding:18px 20px; background:var(--surface);
+    border:1px solid var(--border); border-left:3px solid var(--dim); border-radius:10px;
+  }
+  .verdict.hot { border-left-color:var(--red); }
+  .verdict.clear { border-left-color:var(--green); }
+  .verdict .big { font-size:1.3rem; font-weight:500; }
+  .verdict .why { color:var(--dim); font-size:.88rem; margin-top:5px; }
+  .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-top:16px; }
+  .tile { background:var(--surface); border:1px solid var(--border); border-radius:9px; padding:14px 16px; }
+  .tile .n { font-size:1.7rem; font-weight:600; font-variant-numeric:tabular-nums; }
+  .tile .l { color:var(--dim); font-size:.72rem; text-transform:uppercase; letter-spacing:.07em; margin-top:2px; }
+  nav { display:flex; flex-wrap:wrap; gap:6px; margin:24px 0 14px; }
+  nav button {
+    background:transparent; border:1px solid var(--border); color:var(--dim);
+    padding:7px 14px; border-radius:999px; cursor:pointer; font-size:.84rem; font-family:inherit;
+  }
+  nav button:hover { color:var(--text); border-color:var(--cyan); }
+  nav button[aria-selected="true"] { background:var(--cyan); border-color:var(--cyan); color:#06121c; }
+  .toolbar { display:flex; align-items:center; gap:12px; margin-bottom:12px; }
+  .toolbar .spacer { flex:1; }
+  .refresh { background:transparent; border:1px solid var(--border); color:var(--dim);
+    padding:6px 12px; border-radius:6px; cursor:pointer; font-size:.79rem; font-family:inherit; }
+  .refresh:hover { color:var(--cyan); border-color:var(--cyan); }
+  .stamp { color:var(--dim); font-size:.76rem; }
+  .scroll { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; font-size:.85rem; }
+  th { text-align:left; color:var(--dim); font-weight:500; font-size:.7rem; text-transform:uppercase;
+    letter-spacing:.07em; padding:8px 10px; border-bottom:1px solid var(--border); white-space:nowrap; }
+  td { padding:9px 10px; border-bottom:1px solid var(--border); vertical-align:top; }
+  tbody tr:hover { background:rgba(99,192,245,.05); }
+  .num { font-variant-numeric:tabular-nums; }
+  .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.8rem; }
+  .pill { font-size:.67rem; text-transform:uppercase; letter-spacing:.05em; border-radius:4px;
+    padding:2px 7px; border:1px solid var(--border); color:var(--dim); white-space:nowrap; }
+  .pill.red { color:var(--red); border-color:rgba(226,104,95,.45); background:rgba(226,104,95,.1); }
+  .pill.amber { color:var(--amber); border-color:rgba(232,182,76,.4); background:rgba(232,182,76,.09); }
+  .pill.green { color:var(--green); border-color:rgba(63,215,60,.35); background:rgba(63,215,60,.08); }
+  .sev-CRITICAL { color:var(--red); font-weight:600; }
+  .sev-HIGH { color:var(--amber); }
+  .sev-MODERATE, .sev-LOW { color:var(--dim); }
+  .meter { height:6px; background:var(--border); border-radius:3px; overflow:hidden; min-width:70px; }
+  .meter i { display:block; height:100%; background:var(--cyan); }
+  .note { margin:14px 0 0; padding:12px 14px; border-radius:8px; font-size:.83rem;
+    background:rgba(232,182,76,.08); border:1px solid rgba(232,182,76,.28); color:#f0d49a; }
+  .empty { padding:26px; text-align:center; color:var(--dim); }
+  .prose { background:var(--surface); border:1px solid var(--border); border-radius:10px;
+    padding:20px 22px; white-space:pre-wrap; font-size:.92rem; max-width:78ch; }
+  .panel { display:none; }
+  .panel.on { display:block; }
+  footer.src { margin:32px 0 10px; color:var(--dim); font-size:.77rem; max-width:80ch; }
+  footer.src a { color:var(--cyan); text-decoration:none; }
+  footer.src a:hover { text-decoration:underline; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Blast Radius</h1>
+    <p class="sub">Not what could be bad — what is being used against people right now. Your repositories, their real resolved dependencies, and the vulnerabilities CISA has confirmed are under active exploitation.</p>
+  </header>
+
+  <div class="verdict" id="verdict">
+    <div class="big" id="verdict-big">Reading the estate&hellip;</div>
+    <div class="why" id="verdict-why">Resolving dependencies, then asking OSV, CISA and FIRST about each one.</div>
+  </div>
+
+  <div class="tiles" id="tiles"></div>
+
+  <nav id="tabs" role="tablist">
+    <button role="tab" data-panel="exposed" aria-selected="true">Actively exploited</button>
+    <button role="tab" data-panel="estate" aria-selected="false">Estate</button>
+    <button role="tab" data-panel="queue" aria-selected="false">Triage queue</button>
+    <button role="tab" data-panel="reach" aria-selected="false">Reach</button>
+    <button role="tab" data-panel="coverage" aria-selected="false">Coverage</button>
+    <button role="tab" data-panel="licences" aria-selected="false">Licences</button>
+    <button role="tab" data-panel="briefing" aria-selected="false">Briefing</button>
+  </nav>
+
+  <div class="toolbar">
+    <embabel-operation-state id="state"></embabel-operation-state>
+    <span class="spacer"></span>
+    <span class="stamp" id="stamp"></span>
+    <button class="refresh" id="refresh" type="button">Refresh</button>
+  </div>
+
+  <section class="panel on" id="panel-exposed"></section>
+  <section class="panel" id="panel-estate"></section>
+  <section class="panel" id="panel-queue"></section>
+  <section class="panel" id="panel-reach"></section>
+  <section class="panel" id="panel-coverage"></section>
+  <section class="panel" id="panel-licences"></section>
+  <section class="panel" id="panel-briefing"></section>
+
+  <footer class="src">
+    Dependencies from <a href="https://docs.github.com/en/rest/dependency-graph" target="_blank" rel="noopener noreferrer">GitHub's dependency graph</a>,
+    vulnerabilities from <a href="https://osv.dev" target="_blank" rel="noopener noreferrer">OSV</a>,
+    confirmed exploitation from <a href="https://www.cisa.gov/known-exploited-vulnerabilities-catalog" target="_blank" rel="noopener noreferrer">CISA KEV</a>,
+    exploitation probability from <a href="https://www.first.org/epss/" target="_blank" rel="noopener noreferrer">FIRST EPSS</a>.
+    Severity says how bad a vulnerability would be if exploited; it is not the ranking here, because most of any backlog reads high.
+  </footer>
+</div>
+
+<div id="embabel-badge" style="position:fixed;bottom:0;left:0;right:0;text-align:center;padding:6px 0;background:rgba(10,10,15,0.9);border-top:1px solid rgba(99,192,245,0.2);font-size:0.75rem;color:#6b7280;z-index:9999;pointer-events:none;">
+  Created with <a href="https://embabel.com" target="_blank" rel="noopener noreferrer" style="color:#63c0f5;text-decoration:none;pointer-events:auto;">Embabel Me</a>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  function escapeHtml(v) {
+    if (v === null || v === undefined) return '';
+    return String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+
+  var stateEl = document.getElementById('state');
+  var cache = {}, inflight = {};
+
+  function rowsOf(r) {
+    if (!r) return [];
+    if (Array.isArray(r)) return r;
+    if (Array.isArray(r.data)) return r.data;
+    if (r.data && Array.isArray(r.data.rows)) return r.data.rows;
+    if (Array.isArray(r.rows)) return r.rows;
+    return [];
+  }
+  function warningsOf(r) {
+    if (!r) return [];
+    if (Array.isArray(r.warnings)) return r.warnings;
+    if (r.data && Array.isArray(r.data.warnings)) return r.data.warnings;
+    return [];
+  }
+
+  /* One view, one call, cached. The first read of this realm is genuinely slow —
+     it resolves every dependency and asks about each one — so nothing here fires
+     a view the user has not opened, and nothing re-fires on a tab switch. */
+  function load(name, params, force) {
+    if (!force && cache[name]) return Promise.resolve(cache[name]);
+    if (inflight[name]) return inflight[name];
+    var p = embabel.views.invoke(name, params || {}, { state: stateEl })
+      .then(function (res) {
+        var packed = { rows: rowsOf(res), warnings: warningsOf(res) };
+        cache[name] = packed; inflight[name] = null; return packed;
+      })
+      .catch(function (e) { inflight[name] = null; throw e; });
+    inflight[name] = p;
+    return p;
+  }
+
+  /* Blankness reads as "you have nothing to worry about", which is the worst
+     possible way for this particular app to fail. */
+  function failure(el, e) {
+    el.innerHTML = '<div class="note"><strong>The estate could not be read.</strong> ' +
+      escapeHtml(e && e.message ? e.message : String(e)) +
+      ' — this is the lookup failing, not a clean result. Do not read the absence of rows as safety.</div>';
+  }
+  function warnBlock(w) {
+    if (!w || !w.length) return '';
+    return '<div class="note"><strong>Partial answer.</strong> ' +
+      w.map(function (x) { return escapeHtml(String(x).slice(0, 260)); }).join('<br>') + '</div>';
+  }
+  function stamp() {
+    document.getElementById('stamp').textContent = 'read at ' + new Date().toLocaleTimeString();
+  }
+  function sev(s) { return '<span class="sev-' + escapeHtml(s) + '">' + escapeHtml(s) + '</span>'; }
+  function yesNo(v, trueClass, trueLabel, falseLabel) {
+    return String(v) === 'true'
+      ? '<span class="pill ' + trueClass + '">' + trueLabel + '</span>'
+      : '<span class="pill">' + falseLabel + '</span>';
+  }
+
+  function tiles(t) {
+    document.getElementById('tiles').innerHTML = t.map(function (x) {
+      return '<div class="tile"><div class="n" style="color:' + x.colour + '">' + escapeHtml(x.n) +
+             '</div><div class="l">' + escapeHtml(x.l) + '</div></div>';
+    }).join('');
+  }
+
+  /* ---- Actively exploited: the headline answer ---- */
+  function renderExposed(force) {
+    var el = document.getElementById('panel-exposed');
+    return Promise.all([load('ActivelyExploited', { limit: 50 }, force),
+                        load('RepoExposure', { limit: 100 }, force)])
+      .then(function (both) {
+        var rows = both[0].rows, estate = both[1].rows;
+        var deps = estate.reduce(function (n, r) { return n + Number(r.dependencies || 0); }, 0);
+        var vulns = estate.reduce(function (n, r) { return n + Number(r.vulnerabilities || 0); }, 0);
+        var ransom = rows.filter(function (r) { return r.usedInRansomware === 'Known'; }).length;
+        tiles([
+          { n: estate.length, l: 'repositories', colour: 'var(--text)' },
+          { n: deps, l: 'dependencies', colour: 'var(--text)' },
+          { n: vulns, l: 'vulnerabilities', colour: 'var(--amber)' },
+          { n: rows.length, l: 'actively exploited', colour: rows.length ? 'var(--red)' : 'var(--green)' },
+          { n: ransom, l: 'used in ransomware', colour: ransom ? 'var(--red)' : 'var(--green)' },
+        ]);
+        var v = document.getElementById('verdict');
+        if (!rows.length) {
+          v.className = 'verdict clear';
+          document.getElementById('verdict-big').textContent =
+            'Nothing in the estate is on CISA’s actively-exploited list.';
+          document.getElementById('verdict-why').textContent =
+            vulns + ' known vulnerabilities across ' + deps + ' dependencies, and none of them is currently being exploited in the wild. That is the answer you want, and it is a different statement from "no vulnerabilities".';
+          el.innerHTML = warnBlock(both[0].warnings) +
+            '<div class="empty">No confirmed-exploited vulnerabilities. The triage queue ranks what is left by probability.</div>';
+          stamp(); return;
+        }
+        v.className = 'verdict hot';
+        var top = rows[0];
+        document.getElementById('verdict-big').textContent =
+          rows.length + (rows.length === 1 ? ' vulnerability is' : ' vulnerabilities are') +
+          ' being exploited in the wild right now.';
+        document.getElementById('verdict-why').textContent =
+          top.service + ' depends on ' + top.package + ' ' + (top.version || '') +
+          ', which carries ' + top.cve + ' — confirmed exploited since ' +
+          top.confirmedExploitedSince + '. Owner: ' + (top.team || 'nobody recorded') + '.';
+        var body = rows.map(function (r) {
+          return '<tr>' +
+            '<td><div>' + escapeHtml(r.service) + '</div>' +
+              '<div class="mono" style="color:var(--dim)">' + escapeHtml(r.repo) + '</div></td>' +
+            '<td>' + escapeHtml(r.team || '—') + '</td>' +
+            '<td>' + yesNo(r.internetFacing, 'red', 'internet-facing', 'internal') + '</td>' +
+            '<td class="mono">' + escapeHtml(r.package) + '<br><span style="color:var(--dim)">' +
+              escapeHtml(r.version || 'unknown') + '</span></td>' +
+            '<td class="mono">' + escapeHtml(r.cve) + '</td>' +
+            '<td>' + sev(r.severity) + '</td>' +
+            '<td>' + (r.usedInRansomware === 'Known'
+              ? '<span class="pill red">ransomware</span>' : '<span class="pill">not seen</span>') + '</td>' +
+            '<td class="num">' + escapeHtml(r.confirmedExploitedSince) + '</td>' +
+            '<td>' + escapeHtml(r.cisaRequiredAction || '') + '</td>' +
+          '</tr>';
+        }).join('');
+        el.innerHTML = warnBlock(both[0].warnings) +
+          '<div class="scroll"><table><thead><tr><th>Service</th><th>Team</th><th>Exposure</th>' +
+          '<th>Package</th><th>CVE</th><th>Severity</th><th>Ransomware</th><th>Exploited since</th>' +
+          '<th>CISA required action</th></tr></thead><tbody>' + body + '</tbody></table></div>';
+        stamp();
+      }).catch(function (e) { failure(el, e); });
+  }
+
+  /* ---- Estate ---- */
+  function renderEstate(force) {
+    var el = document.getElementById('panel-estate');
+    return load('RepoExposure', { limit: 100 }, force).then(function (r) {
+      if (!r.rows.length) {
+        el.innerHTML = '<div class="empty">No repositories are being watched yet. Add a WatchedRepo and this fills in.</div>';
+        return;
+      }
+      var body = r.rows.map(function (x) {
+        var pct = Number(x.dependencies) ? Math.round(100 * Number(x.versionResolved) / Number(x.dependencies)) : 0;
+        return '<tr>' +
+          '<td><div>' + escapeHtml(x.service) + '</div><div class="mono" style="color:var(--dim)">' +
+            escapeHtml(x.repo) + '</div></td>' +
+          '<td>' + escapeHtml(x.team || '—') + '</td>' +
+          '<td><span class="pill' + (x.tier === 'critical' ? ' amber' : '') + '">' + escapeHtml(x.tier || '—') + '</span></td>' +
+          '<td class="num">' + escapeHtml(x.dependencies) + '</td>' +
+          '<td><div class="meter"><i style="width:' + pct + '%"></i></div>' +
+            '<span class="num" style="color:var(--dim);font-size:.75rem">' + pct + '% pinned</span></td>' +
+          '<td class="num">' + escapeHtml(x.vulnerabilities) + '</td>' +
+          '<td class="num sev-CRITICAL">' + escapeHtml(x.critical) + '</td>' +
+          '<td class="num">' + (Number(x.activelyExploited)
+            ? '<span class="pill red">' + escapeHtml(x.activelyExploited) + '</span>'
+            : '<span class="pill green">0</span>') + '</td>' +
+        '</tr>';
+      }).join('');
+      el.innerHTML = warnBlock(r.warnings) +
+        '<div class="scroll"><table><thead><tr><th>Service</th><th>Team</th><th>Tier</th>' +
+        '<th>Dependencies</th><th>Version resolved</th><th>Vulnerabilities</th><th>Critical</th>' +
+        '<th>Exploited</th></tr></thead><tbody>' + body + '</tbody></table></div>';
+      stamp();
+    }).catch(function (e) { failure(el, e); });
+  }
+
+  /* ---- Triage queue ---- */
+  function renderQueue(force) {
+    var el = document.getElementById('panel-queue');
+    return load('RiskRanked', { limit: 60 }, force).then(function (r) {
+      if (!r.rows.length) { el.innerHTML = '<div class="empty">Nothing with a CVE in the watched estate.</div>'; return; }
+      var body = r.rows.map(function (x) {
+        var pctile = Number(x.epssPercentile) || 0;
+        return '<tr>' +
+          '<td class="mono">' + escapeHtml(x.cve) + '</td>' +
+          '<td>' + escapeHtml(x.service) + '</td>' +
+          '<td>' + escapeHtml(x.team || '—') + '</td>' +
+          '<td class="mono">' + escapeHtml(x.package) + ' <span style="color:var(--dim)">' +
+            escapeHtml(x.version || '') + '</span></td>' +
+          '<td>' + (String(x.confirmedExploited) === 'true'
+            ? '<span class="pill red">confirmed</span>' : '<span class="pill">not confirmed</span>') + '</td>' +
+          '<td><div class="meter"><i style="width:' + Math.min(100, pctile) + '%"></i></div>' +
+            '<span class="num" style="color:var(--dim);font-size:.75rem">' + escapeHtml(x.epssProbability) +
+            ' (' + escapeHtml(pctile) + 'th)</span></td>' +
+          '<td>' + sev(x.severity) + '</td>' +
+          '<td>' + escapeHtml(x.summary || '') + '</td>' +
+        '</tr>';
+      }).join('');
+      el.innerHTML = warnBlock(r.warnings) +
+        '<div class="scroll"><table><thead><tr><th>CVE</th><th>Service</th><th>Team</th><th>Package</th>' +
+        '<th>Exploited</th><th>EPSS (30-day)</th><th>Severity</th><th>Summary</th>' +
+        '</tr></thead><tbody>' + body + '</tbody></table></div>' +
+        '<div class="note">Ordered the way exploitation actually works: CISA-confirmed first, then modelled probability, then severity. Sorting this table by severity is how a backlog becomes unworkable.</div>';
+      stamp();
+    }).catch(function (e) { failure(el, e); });
+  }
+
+  /* ---- Reach ---- */
+  function renderReach(force) {
+    var el = document.getElementById('panel-reach');
+    return load('BlastRadius', { limit: 40 }, force).then(function (r) {
+      if (!r.rows.length) { el.innerHTML = '<div class="empty">No vulnerabilities to trace.</div>'; return; }
+      var body = r.rows.map(function (x) {
+        return '<tr>' +
+          '<td class="mono">' + escapeHtml(x.cve || x.advisory) + '</td>' +
+          '<td>' + sev(x.severity) + '</td>' +
+          '<td class="num">' + escapeHtml(x.repositoriesAffected) + '</td>' +
+          '<td class="num">' + escapeHtml(x.packageVersions) + '</td>' +
+          '<td>' + (Array.isArray(x.reaches) ? x.reaches.map(escapeHtml).join(', ') : '') + '</td>' +
+          '<td>' + (String(x.confirmedExploited) === 'true'
+            ? '<span class="pill red">exploited</span>' : '') + '</td>' +
+          '<td>' + escapeHtml(x.summary || '') + '</td>' +
+        '</tr>';
+      }).join('');
+      el.innerHTML = warnBlock(r.warnings) +
+        '<div class="scroll"><table><thead><tr><th>CVE</th><th>Severity</th><th>Repos</th>' +
+        '<th>Package versions</th><th>Reaches</th><th></th><th>Summary</th></tr></thead><tbody>' +
+        body + '</tbody></table></div>' +
+        '<div class="note">One upgrade that clears five services is worth more than five that clear one. This is where to find it.</div>';
+      stamp();
+    }).catch(function (e) { failure(el, e); });
+  }
+
+  /* ---- Coverage ---- */
+  function renderCoverage(force) {
+    var el = document.getElementById('panel-coverage');
+    return load('UnresolvedDependencies', { limit: 120 }, force).then(function (r) {
+      var intro = '<div class="note"><strong>These are holes, not clean results.</strong> ' +
+        'GitHub could not pin these dependencies to an exact version, so nothing can be said about ' +
+        'their vulnerability status. Asking a vulnerability database about a versionless package ' +
+        'returns every flaw it has ever had — eighty rather than seven, for one package this ' +
+        'realm was tested against — so they are excluded from every finding rather than ' +
+        'inflating it, and listed here instead.</div>';
+      if (!r.rows.length) {
+        el.innerHTML = '<div class="empty">Every dependency resolved to an exact version. Full coverage.</div>' + intro;
+        return;
+      }
+      var body = r.rows.map(function (x) {
+        return '<tr><td>' + escapeHtml(x.service) + '</td>' +
+               '<td class="mono" style="color:var(--dim)">' + escapeHtml(x.repo) + '</td>' +
+               '<td class="mono">' + escapeHtml(x.package) + '</td></tr>';
+      }).join('');
+      el.innerHTML = intro + warnBlock(r.warnings) +
+        '<div class="scroll"><table><thead><tr><th>Service</th><th>Repository</th><th>Package</th>' +
+        '</tr></thead><tbody>' + body + '</tbody></table></div>';
+      stamp();
+    }).catch(function (e) { failure(el, e); });
+  }
+
+  /* ---- Licences ---- */
+  function renderLicences(force) {
+    var el = document.getElementById('panel-licences');
+    return load('LicenceMix', { limit: 40 }, force).then(function (r) {
+      if (!r.rows.length) { el.innerHTML = '<div class="empty">No licence data in the SBOMs.</div>'; return; }
+      var max = r.rows.reduce(function (m, x) { return Math.max(m, Number(x.packages) || 0); }, 1);
+      var body = r.rows.map(function (x) {
+        var w = Math.round(100 * Number(x.packages) / max);
+        return '<tr><td class="mono">' + escapeHtml(x.licence) + '</td>' +
+          '<td class="num">' + escapeHtml(x.packages) + '</td>' +
+          '<td><div class="meter"><i style="width:' + w + '%"></i></div></td>' +
+          '<td class="num">' + escapeHtml(x.repos) + '</td>' +
+          '<td class="mono" style="color:var(--dim)">' +
+            (Array.isArray(x.examples) ? x.examples.map(escapeHtml).join(', ') : '') + '</td></tr>';
+      }).join('');
+      el.innerHTML = warnBlock(r.warnings) +
+        '<div class="scroll"><table><thead><tr><th>Licence</th><th>Packages</th><th></th>' +
+        '<th>Repos</th><th>Examples</th></tr></thead><tbody>' + body + '</tbody></table></div>' +
+        '<div class="note">Free alongside the security data, because the same SBOM answers it.</div>';
+      stamp();
+    }).catch(function (e) { failure(el, e); });
+  }
+
+  /* ---- Briefing: the only panel that spends a model call ---- */
+  function renderBriefing(force) {
+    var el = document.getElementById('panel-briefing');
+    return load('ExposureBriefing', { limit: 30 }, force).then(function (r) {
+      if (!r.rows.length || !r.rows[0].briefing) {
+        el.innerHTML = '<div class="empty">No confirmed-exploited findings to brief on. ' +
+          'The assessment is written from those, so an empty briefing means an empty shortlist.</div>';
+        return;
+      }
+      el.innerHTML = warnBlock(r.warnings) +
+        '<div class="prose">' + escapeHtml(r.rows[0].briefing) + '</div>' +
+        '<div class="note">Written from the confirmed-exploited findings above, and from nothing else. The tables are the evidence under it.</div>';
+      stamp();
+    }).catch(function (e) { failure(el, e); });
+  }
+
+  var renderers = {
+    exposed: renderExposed, estate: renderEstate, queue: renderQueue,
+    reach: renderReach, coverage: renderCoverage, licences: renderLicences, briefing: renderBriefing,
+  };
+  var current = 'exposed';
+
+  function show(name, force) {
+    current = name;
+    var bs = document.querySelectorAll('#tabs button');
+    for (var i = 0; i < bs.length; i++) {
+      bs[i].setAttribute('aria-selected', bs[i].dataset.panel === name ? 'true' : 'false');
+    }
+    var ps = document.querySelectorAll('.panel');
+    for (var j = 0; j < ps.length; j++) ps[j].classList.remove('on');
+    var el = document.getElementById('panel-' + name);
+    el.classList.add('on');
+    if (!el.innerHTML.trim() || force) {
+      el.innerHTML = '<div class="empty">Reading&hellip; the first pass resolves every dependency and asks about each one, so it takes a moment.</div>';
+      renderers[name](force);
+    }
+  }
+
+  document.getElementById('tabs').addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-panel]');
+    if (b) show(b.dataset.panel, false);
+  });
+  document.getElementById('refresh').addEventListener('click', function () { show(current, true); });
+
+  function start() { show('exposed', false); }
+
+  if (embabel.manifest && embabel.manifest.ready) {
+    embabel.manifest.ready.then(function (m) {
+      if (m && m.ok === false) {
+        var missing = (m.missing || []).map(function (x) { return escapeHtml(String(x)); }).join(', ');
+        document.getElementById('verdict-big').textContent = 'This world is missing what the app reads.';
+        document.getElementById('verdict-why').textContent =
+          'Install realm-exposure and name the repositories to watch' + (missing ? ' (missing: ' + missing + ')' : '') + '.';
+        return;
+      }
+      start();
+    }).catch(start);
+  } else { start(); }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,43 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "OSV — Open Source Vulnerabilities",
+    "version": "1.0.0",
+    "description": "Google's open vulnerability database for open-source packages. Free, keyless, no account. `vulnsForPurl` takes a package URL — INCLUDING its qualifiers, which matters: GitHub's SBOM emits maven purls as `...@2.14.1?type=jar`, and OSV accepts that verbatim where several other services reject it. One call returns the vulnerability, its CVE alias, its summary and its severity together, so no second lookup is needed to learn what an advisory actually says."
+  },
+  "servers": [{ "url": "https://api.osv.dev" }],
+  "paths": {
+    "/v1/query": {
+      "post": {
+        "operationId": "vulnsForPurl",
+        "summary": "Every known vulnerability affecting one exact package version",
+        "description": "Body is `{package: {purl}}`. Returns `{vulns: [...]}`, each carrying `id` (a GHSA or other database id), `aliases` (where the CVE lives — `aliases[0]` by convention), `summary`, `published`, `severity` (a list whose `score` is a CVSS VECTOR string, not a number) and `database_specific.severity` (the word CRITICAL / HIGH / MODERATE / LOW). An ABSENT `vulns` key means this version has nothing known against it, which is the common and correct answer.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "package": {
+                    "type": "object",
+                    "description": "The package to query.",
+                    "properties": {
+                      "purl": { "type": "string", "description": "Package URL with qualifiers, e.g. `pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1?type=jar`." }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Vulnerabilities affecting the version; `vulns` absent when there are none.",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    }
+  }
+}

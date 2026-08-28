@@ -1,0 +1,115 @@
+# Five producers, one per hop. Three of them are per-key (a source that answers
+# about one thing at a time) and two are genuinely batched — and the difference
+# is declared rather than discovered, because getting it wrong is either an
+# N+1 storm or a starved key.
+
+# The dependency tree. One call per repository, and GitHub has already done the
+# resolution — no manifest is parsed here or anywhere downstream. `$.sbom.packages[*]`
+# includes the repository itself as the first element; it carries no purl, so it
+# falls out at the identity check rather than needing to be filtered.
+- name: repoDependencies
+  kind: remote
+  operation: repoSbom
+  records: "$.sbom.packages[*]"
+  keyArgs: [owner, repo]
+  echoKeyAs: key
+  maxKeysPerCall: 1
+  project:
+    packageName: name
+    version: versionInfo
+    licence: licenseConcluded
+    spdxId: SPDXID
+    # The purl lives in an array of typed references. Index 0 is the purl in
+    # every SPDX document GitHub emits; a package with no externalRefs at all
+    # yields nothing here and is dropped for want of an identity, which is the
+    # correct outcome — a component nothing can address cannot be looked up.
+    purl: externalRefs.0.referenceLocator
+  # A dependency tree changes when someone merges a bump, not continuously.
+  cache: { kind: ttl, seconds: 86400 }
+
+# Everything known against one exact version. OSV answers about ONE package per
+# call, so this is declared per-key: batching here would silently ask about the
+# first purl and return nothing for the rest, which is the single most expensive
+# mistake available in a producer because it looks like good news.
+#
+# The purl is injected into a nested JSON body rather than a query string — the
+# `{keys}` placeholder is substituted into string values wherever they sit in the
+# argument tree, which is what lets a POST-bodied source be joined declaratively.
+# Note the purl goes out WITH its `?type=jar` qualifier exactly as GitHub emitted
+# it: OSV accepts that, and not re-writing it is why this realm parses nothing.
+- name: vulnsForPurl
+  kind: remote
+  operation: vulnsForPurl
+  records: "$.vulns[*]"
+  args:
+    package:
+      purl: "{keys}"
+  keyTemplate: "{key}"
+  echoKeyAs: key
+  maxKeysPerCall: 1
+  batchSafe: false
+  project:
+    vulnId: id
+    # The CVE is an ALIAS, because the primary key is a GHSA. That is the shape of
+    # the data: an advisory's first alias is its CVE by convention, and one that
+    # never got a CVE has an empty list and correctly yields nothing here.
+    cveId: aliases.0
+    summary: summary
+    severity: database_specific.severity
+    cvssVector: severity.0.score
+    published: published
+  # What is known against an already-published version only grows, and slowly.
+  #
+  # `negativeTtlSeconds` is the load-bearing half. The overwhelming majority of
+  # dependencies are CLEAN, and a clean answer is an EMPTY one — so without a
+  # negative TTL the cache stores only the handful that returned vulnerabilities
+  # and every query re-asks OSV about the several hundred that did not. Measured
+  # on this realm before it was set: 579 of 586 keys re-fetched on every single
+  # run, ~20 seconds a view, with nothing changed between runs. Caching the
+  # absence is what makes a supply-chain realm usable at all.
+  cache: { kind: ttl, seconds: 86400, negativeTtlSeconds: 86400 }
+
+# CISA's catalog. NO keyArgs at all: the endpoint takes no parameters and returns
+# every entry, so one call serves any number of anchors. There is no echoKeyAs
+# either — each record carries its own `cveID`, which the join matches directly
+# against the anchor's CVE, so the engine filters 1,700 rows down to the handful
+# that touch this estate. Asking about four hundred dependencies costs exactly
+# one HTTP request.
+- name: kevCatalog
+  kind: remote
+  operation: kevCatalog
+  records: "$.vulnerabilities[*]"
+  project:
+    cveID: cveID
+    vendorProject: vendorProject
+    product: product
+    vulnerabilityName: vulnerabilityName
+    dateAdded: dateAdded
+    shortDescription: shortDescription
+    requiredAction: requiredAction
+    dueDate: dueDate
+    knownRansomwareCampaignUse: knownRansomwareCampaignUse
+  # CISA publishes changes a few times a week. Hourly is respectful and still
+  # means a newly-listed CVE surfaces the same morning.
+  cache: { kind: ttl, seconds: 3600 }
+
+# EPSS. Genuinely batched — the `cve` parameter is a comma-separated list — so
+# the keys render into one query string via the template rather than one call
+# each. `limit` is set explicitly because the API's default of 100 would truncate
+# a large batch without saying so, which would read as "these CVEs have no score".
+- name: epssScores
+  kind: remote
+  operation: epssScores
+  records: "$.data[*]"
+  args:
+    cve: "{keys}"
+    limit: "2000"
+  keyTemplate: "{key}"
+  keyJoin: ","
+  project:
+    cve: cve
+    epss: epss
+    percentile: percentile
+    date: date
+  # Re-scored daily by FIRST; there is nothing to gain from asking twice an hour.
+  cache: { kind: ttl, seconds: 21600 }

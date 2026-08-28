@@ -1,0 +1,28 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "GitHub Dependency Graph (SBOM)",
+    "version": "1.0.0",
+    "description": "GitHub's own resolved dependency graph for a repository, exported as SPDX 2.3. Anonymous for a PUBLIC repository; a private one needs a token with repo scope. The dependency graph must be enabled on the repository — it is on by default for public repos and an organisation setting for private ones."
+  },
+  "servers": [{ "url": "https://api.github.com" }],
+  "paths": {
+    "/repos/{owner}/{repo}/dependency-graph/sbom": {
+      "get": {
+        "operationId": "repoSbom",
+        "summary": "The repository's resolved dependency tree as an SPDX 2.3 SBOM",
+        "description": "Returns `{sbom: {packages: [...]}}`. Each package carries `name`, `versionInfo`, `licenseConcluded`, `SPDXID`, and an `externalRefs` array whose purl entry (`referenceType: purl`) is the package URL — the canonical, ecosystem-qualified identifier that deps.dev and OSV both accept. The FIRST package in the list is the repository itself, not a dependency. Some packages carry no purl (an unresolvable or vendored component); those cannot be looked up anywhere and are dropped.",
+        "parameters": [
+          { "name": "owner", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Repository owner — the org or user login." },
+          { "name": "repo", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Repository name, without the owner." }
+        ],
+        "responses": {
+          "200": {
+            "description": "SPDX 2.3 document under `sbom`.",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    }
+  }
+}

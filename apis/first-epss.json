@@ -1,0 +1,28 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "FIRST EPSS",
+    "version": "1.0.0",
+    "description": "The Exploit Prediction Scoring System from FIRST — the modelled probability that a CVE will be exploited in the wild within the next 30 days, plus its percentile against every other CVE. Free, keyless, and genuinely batched: many CVEs in one comma-separated request."
+  },
+  "servers": [{ "url": "https://api.first.org" }],
+  "paths": {
+    "/data/v1/epss": {
+      "get": {
+        "operationId": "epssScores",
+        "summary": "EPSS probability and percentile for a batch of CVEs",
+        "description": "Returns `{data: [{cve, epss, percentile, date}]}`. `epss` is a probability between 0 and 1 — 0.9 means a nine-in-ten modelled chance of exploitation activity within thirty days. `percentile` ranks it against all scored CVEs, which is usually the more legible number to quote. A CVE with no score is simply absent from `data` rather than returned as zero.",
+        "parameters": [
+          { "name": "cve", "in": "query", "required": true, "schema": { "type": "string" }, "description": "Comma-separated CVE ids, e.g. `CVE-2021-44228,CVE-2014-0160`." },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Maximum rows. The default of 100 truncates a large batch silently, so set it." }
+        ],
+        "responses": {
+          "200": {
+            "description": "Scores for the CVEs that have one.",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    }
+  }
+}
