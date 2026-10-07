@@ -23,6 +23,7 @@ description: |
   answer arrives before anyone has been asked for an API key.
 version: 0.1.0
 author: rod
+category: security
 tags:
   - security
   - supply-chain
