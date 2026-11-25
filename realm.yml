@@ -21,7 +21,7 @@ description: |
   deps.dev, CISA's Known Exploited Vulnerabilities catalog, and FIRST's
   EPSS. Public repositories need no credentials at all, so the first
   answer arrives before anyone has been asked for an API key.
-version: 0.1.0
+version: 0.1.1
 author: rod
 category: security
 tags:
